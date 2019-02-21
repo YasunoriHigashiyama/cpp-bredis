@@ -41,7 +41,7 @@ template <typename Iterator> class MatchResult {
 
   public:
     MatchResult(std::size_t expected_count)
-        : expected_count_(expected_count), matched_results_(0) {}
+        : matched_results_(0), expected_count_(expected_count) {}
 
     std::pair<Iterator, bool> operator()(Iterator begin, Iterator end) {
         using Policy = bredis::parsing_policy::drop_result;

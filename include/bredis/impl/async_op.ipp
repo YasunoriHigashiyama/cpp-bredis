@@ -27,8 +27,8 @@ class async_read_op {
     template <class DeducedHandler>
     async_read_op(DeducedHandler &&deduced_handler, NextLayer &stream,
                   DynamicBuffer &rx_buff, std::size_t replies_count)
-        : stream_(stream), rx_buff_(rx_buff), replies_count_(replies_count),
-          callback_(std::forward<ReadCallback>(deduced_handler)) {}
+        : stream_(stream), rx_buff_(rx_buff),
+          callback_(std::forward<ReadCallback>(deduced_handler)), replies_count_(replies_count) {}
 
     void operator()(boost::system::error_code, std::size_t bytes_transferred);
 
