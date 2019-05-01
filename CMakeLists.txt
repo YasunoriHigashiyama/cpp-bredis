@@ -7,6 +7,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 include (CTest)
 enable_testing()
 
+
+
 add_definitions(-DBOOST_ERROR_CODE_HEADER_ONLY)
 add_definitions(-DBOOST_COROUTINES_NO_DEPRECATION_WARNING)
 #add_definitions(-DBREDIS_DEBUG)
@@ -70,8 +72,19 @@ if(WIN32)
     set(LINK_DEPENDENCIES ${Boost_LIBRARIES} catch_lib)
     add_definitions(-DBOOST_ALL_DYN_LINK -DBOOST_THREAD_USE_LIB -D_WIN32_WINNT=0x0501)
 else()
-    set(LINK_DEPENDENCIES pthread ${Boost_LIBRARIES} catch_lib)
+    #add_definitions(-Wall -Wextra -pedantic -Werror)
+    add_definitions(-Wall -Wextra -pedantic)
+    #add_definitions(-fsanitize=undefined -fsanitize=address -fno-omit-frame-pointer)
+    set(LINK_DEPENDENCIES pthread ${Boost_LIBRARIES} catch_lib) #  asan ubsan
 endif()
+
+if ((Boost_MAJOR_VERSION GREATER_EQUAL 1) AND (Boost_MINOR_VERSION GREATER_EQUAL 70))
+    set(BOOST_VERSION_OK true)
+else()
+    set(BOOST_VERSION_OK false)
+endif()
+
+MESSAGE(STATUS "BOOST_VERSION_OK ${BOOST_VERSION_OK}")
 
 add_subdirectory(examples)
 
@@ -133,11 +146,26 @@ add_executable(t-19-transaction t/19-transaction.cpp)
 target_link_libraries(t-19-transaction ${LINK_DEPENDENCIES})
 add_test("t-19-transaction" t-19-transaction)
 
-add_executable(t-20-promise t/20-promise.cpp)
-target_link_libraries(t-20-promise ${LINK_DEPENDENCIES})
-add_test("t-20-promise" t-20-promise)
+if(BOOST_VERSION_OK)
+    add_executable(t-20-promise t/20-promise.cpp)
+    target_link_libraries(t-20-promise ${LINK_DEPENDENCIES})
+    add_test("t-20-promise" t-20-promise)
+endif()
 
 add_executable(t-21-coroutine t/21-coroutine.cpp)
 target_link_libraries(t-21-coroutine ${LINK_DEPENDENCIES})
 add_test("t-21-coroutine" t-21-coroutine)
 
+add_executable(t-22-ping_drop-policy t/22-ping_drop-policy.cpp)
+target_link_libraries(t-22-ping_drop-policy ${LINK_DEPENDENCIES})
+add_test("t-22-ping_drop-policy" t-22-ping_drop-policy)
+
+add_executable(t-23-stream t/23-stream.cpp)
+target_link_libraries(t-23-stream ${LINK_DEPENDENCIES})
+add_test("t-23-stream" t-23-stream)
+
+if(BOOST_VERSION_OK)
+    add_executable(t-24-dynbuff t/24-dynbuff.cpp)
+    target_link_libraries(t-24-dynbuff ${LINK_DEPENDENCIES})
+    add_test("t-24-dynbuff" t-24-dynbuff)
+endif()

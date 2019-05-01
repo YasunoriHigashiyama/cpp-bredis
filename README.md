@@ -9,6 +9,7 @@ Boost::ASIO low-level redis client (connector)
 ## Features
 
 - header only
+- zero-copy (currently only for received replies from Redis)
 - low-level controls (i.e. you can cancel, or do manual DNS-resolving before a connection)
 - unix domain sockets support
 - works on linux (clang, gcc) and windows (msvc)
@@ -16,6 +17,24 @@ Boost::ASIO low-level redis client (connector)
 - inspired by [beast](https://github.com/vinniefalco/Beast)
 
 ## Changelog
+
+### 0.07
+- minor parsing speed improvements (upto 10% in synthetic tests)
+- fix compilation issues on boost::asio 1.70
+- make it possible to use `DynamicBuffer_v2` (dynamic_string_buffer, dynamic_vector_buffer)
+    from boost::asio 1.70 in addition to `streambuf`. `DynamicBuffer_v1` was actually never
+    supported by `bredis`
+- [API breakage] `boos::asio::use_future` cannot be used with `bredis` and `boost::asio`
+    prior `v1.70` (see [issue](https://github.com/boostorg/asio/issues/226)). If you need
+    `use_future` then either upgrade boost::asio or use previous `bredis` version.
+
+### 0.06
+- the `parsing_policy::drop_result` was documented and made applicable in client code
+- updated preformance results
+- fixed compliation warnings (`-Wall -Wextra -pedantic -Werror`)
+- added shortcut header `include/bredis.hpp`
+- added redis-streams usage example
+- added multi-thread example
 
 ### 0.05
 - fixed level 4 warning in MSVC
@@ -55,16 +74,20 @@ can be done on the socket object outside of the connector)
 
 ## Performance
 
-Results achieved with `examples/speed_test_async_multi.cpp` for 1 thread, Intel Core i7-4800MQ, gentoo linux
+Results achieved with `examples/speed_test_async_multi.cpp` for 1 thread, Intel Core i7-8550U, void-linux, gcc 8.3.0
 
-|  bredis (commands/s)       | redox (commands/s)           |
-|----------------------------|------------------------------|
-|  1.30257e+06               |  1.19214e+06                 |
+ | bredis (commands/s) | bredis(*) (commands/s) | redox (commands/s)|
+ |---------------------|------------------------|-------------------|
+ |      1.80845e+06    |      2.503e+06         |    0.999375+06    |
 
 These results are not completely fair, because of the usage of different semantics in the
 APIs; however they are still interesting, as they are using different
 underlying event libraries ([Boost::ASIO](http://www.boost.org/doc/libs/release/libs/asio/) vs [libev](http://software.schmorp.de/pkg/libev.html)) as well as redis protocol
 parsing libraries (written from scratch vs [hiredis](https://github.com/redis/hiredis))
+
+`(*)` bredis with drop_result policy, i.e. replies from redis server are
+scanned only for formal correctness and never delivered to the caller.
+
 
 ## Work with the result
 
@@ -383,6 +406,38 @@ boost::asio::spawn(
     });
 ```
 
+## Steams
+
+There is no specific support for streams (appeared in redis 5.0) in bredis,
+they are just usual `XADD`, `XRANGE` etc. commands and corresponding replies.
+
+```cpp
+...
+Buffer rx_buff;
+c.write(r::single_command_t{ "XADD", "mystream", "*", "cpu-temp", "23.4", "load", "2.3" });
+auto parse_result1 = c.read(rx_buff);
+auto extract1 = boost::apply_visitor(Extractor(), parse_result1.result);
+auto id1 = boost::get<r::extracts::string_t>(extract1);
+
+c.write(r::single_command_t{ "XADD", "mystream", "*", "cpu-temp", "23.2", "load", "2.1" });
+auto parse_result2 = c.read(rx_buff);
+auto extract2 = boost::apply_visitor(Extractor(), parse_result2.result);
+auto id2 = boost::get<r::extracts::string_t>(extract2);
+rx_buff.consume(parse_result2.consumed);
+
+c.write(r::single_command_t{ "XRANGE" , "mystream",  id1.str, id2.str});
+auto parse_result3 = c.read(rx_buff);
+auto extract3 = boost::apply_visitor(Extractor(), parse_result3.result);
+rx_buff.consume(parse_result3.consumed);
+
+auto& outer_arr = boost::get<r::extracts::array_holder_t>(extract3);
+auto& inner_arr1 = boost::get<r::extracts::array_holder_t>(outer_arr.elements[0]);
+auto& inner_arr2 = boost::get<r::extracts::array_holder_t>(outer_arr.elements[1]);
+...
+
+```
+
+
 ## Inspecting network traffic
 
 See `t/SocketWithLogging.hpp` for an example. The main idea is quite simple:
@@ -409,7 +464,39 @@ r::Connection<next_layer_t> c(socket);
 socket.cancel();
 ```
 
+## Thread-safety
+
+`bredis` itself is thread-agnostic, however the underlying socket (`next_layer_t`)
+and used buffers are usually not thread-safe. To handle that in multi-thead
+environment the access to those objects should be sequenced via
+`asio::io_context::strand` . See the `examples/multi-threads-1.cpp`.
+
+
+## parsing_policy::drop_result
+The performance still can be boosted if it is known beforehand that the response from
+redis server is not needed at all. For example, the only possible response to `PING`
+command is `PONG` reply, usually there is no sense it validating that `PONG` reply,
+as soon as it is known, that redis-server alredy delivered us **some** reply
+(in practice it is `PONG`). Another example is `SET` command, when redis-server
+**usually** replies with `OK`.
+
+With `parsing_policy::drop_result` the reply result is just verified with formal
+compliance to redis protocol, and then it is discarded.
+
+It should be noted, that redis can reply back with error, which aslo correct
+reply, but the caller side isn't able to see it when `parsing_policy::drop_result`
+is applied. So, it should be used with care, when you know what your are doing. You have
+been warned.
+
+It is safe, however, to mix different parsing policies on the same connection,
+i.e. write `SET` command and read it's reply with `parsing_policy::drop_result` and
+then write `GET` command and read it's reply with `parsing_policy::keep_result`.
+See the `examples/speed_test_async_multi.cpp`.
+
 ## API
+
+There's a convenience header include/bredis.hpp, doing `#include "bredis.hpp"` will include
+every header under include/bredis/ .
 
 ### `Iterator` template
 
@@ -640,7 +727,7 @@ The asynchronous read has the following signature:
 ```cpp
 void-or-deduced
 async_read(DynamicBuffer &rx_buff, ReadCallback read_callback,
-               std::size_t replies_count = 1);
+               std::size_t replies_count = 1, Policy = bredis::parsing_policy::keep_result{});
 ```
 
 It reads `replies_count` replies from the *next_layer* stream, which will be
@@ -670,6 +757,8 @@ MIT
 - [nkochakian](https://github.com/nkochakian)
 - [Yuval Hager](https://github.com/yhager)
 - [Vinnie Falco](https://github.com/vinniefalco)
+- [Stephen Coleman](https://github.com/omegacoleman)
+- [maxtorm miximtor](https://github.com/miximtor)
 
 ## See also
 - https://github.com/Cylix/cpp_redis
